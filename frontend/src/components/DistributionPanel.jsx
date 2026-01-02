@@ -1,13 +1,18 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Plot from "react-plotly.js";
 import { utilBtn } from "./uiStyles";
 
-export default function DistributionPanel({ numericColumns, api, file }) {
+export default function DistributionPanel({ numericColumns, api, file, onReportUpdate }) {
   const [column, setColumn] = useState("");
   const [bins, setBins] = useState(20);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    if (!result) return;
+    onReportUpdate?.({ result });
+  }, [result, onReportUpdate]);
 
   async function run() {
     setErr("");
@@ -163,7 +168,7 @@ export default function DistributionPanel({ numericColumns, api, file }) {
                   Shapiro‑Wilk p‑value: {result.shapiro_wilk ? result.shapiro_wilk.p_value.toFixed(4) : "n/a"}
                 </div>
                 <div style={{ fontSize: 9, color: "var(--text-muted)" }}>
-                  Shapiro‑Wilk runs only for 3–5000 rows. p &lt; 0.05 suggests non‑normal data.
+                  Shapiro‑Wilk is best for small to medium samples (roughly under 2000 rows). p &lt; 0.05 suggests non‑normal data.
                 </div>
               </div>
             </div>

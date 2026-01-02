@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { utilBtn, thUtil, tdUtil } from "./uiStyles";
+import PowerAnalysisPanel from "./PowerAnalysisPanel";
 
 const TESTS = [
   { value: "two_sample_t", label: "Two-sample t-test" },
@@ -8,7 +9,8 @@ const TESTS = [
   { value: "anova", label: "One-way ANOVA" },
 ];
 
-export default function HypothesisTestingPanel({ columns, numericColumns, categoricalColumns, api, file }) {
+export default function HypothesisTestingPanel({ columns, numericColumns, categoricalColumns, api, file, onReportUpdate }) {
+  const [showPower, setShowPower] = useState(true);
   const [testType, setTestType] = useState(TESTS[0].value);
   const [columnA, setColumnA] = useState("");
   const [columnB, setColumnB] = useState("");
@@ -16,6 +18,11 @@ export default function HypothesisTestingPanel({ columns, numericColumns, catego
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [result, setResult] = useState(null);
+
+  useEffect(() => {
+    if (!result) return;
+    onReportUpdate?.({ result, testType });
+  }, [result, testType, onReportUpdate]);
 
   const nonNumericColumns = useMemo(() => {
     const detected = categoricalColumns && categoricalColumns.length > 0 ? categoricalColumns : null;
@@ -369,6 +376,24 @@ export default function HypothesisTestingPanel({ columns, numericColumns, catego
             </div>
           )}
         </div>
+      </div>
+
+      <div style={{ marginTop: 16, border: "1px solid var(--border)", background: "var(--panel-alt)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", borderBottom: "1px solid var(--border)", background: "var(--panel-strong)" }}>
+          <div style={{ fontSize: 12, fontWeight: 700 }}>POWER ANALYSIS</div>
+          <button
+            type="button"
+            onClick={() => setShowPower((prev) => !prev)}
+            style={{ ...utilBtn, fontSize: 9, padding: "3px 8px" }}
+          >
+            {showPower ? "HIDE" : "SHOW"}
+          </button>
+        </div>
+        {showPower && (
+          <div style={{ padding: 10 }}>
+            <PowerAnalysisPanel api={api} />
+          </div>
+        )}
       </div>
     </div>
   );

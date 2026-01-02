@@ -1,35 +1,133 @@
-import { useEffect, useState } from "react";
-import Plot from "react-plotly.js";
+import { useEffect, useMemo, useState } from "react";
 import { tdUtil, thUtil, utilBtn } from "./uiStyles";
+import { buildRegressionGraph, renderRegressionGraph } from "./regressionGraphs.jsx";
 
-export default function RegressionPanel({ numericColumns, file, api }) {
+export default function RegressionPanel({ numericColumns, columnRoles, file, api, onReportUpdate }) {
   const [xCols, setXCols] = useState([""]);
   const [yCol, setYCol] = useState("");
+  const [modelType, setModelType] = useState("linear");
+  const [threshold, setThreshold] = useState(0.5);
   const [res, setRes] = useState(null);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
-  const [selectedGraphs, setSelectedGraphs] = useState([{ id: 1, type: "predicted-actual", xCol: "" }]);
+  const [selectedGraphs, setSelectedGraphs] = useState([{ id: 1, type: "predicted-actual", xCol: "", xCol2: "" }]);
+
+  const allowedPredictors = useMemo(() => {
+    if (!columnRoles || Object.keys(columnRoles).length === 0) return numericColumns;
+    return numericColumns.filter((col) => columnRoles[col] !== "identifier" && columnRoles[col] !== "outcome");
+  }, [numericColumns, columnRoles]);
+
+  const allowedOutcomes = useMemo(() => {
+    if (!columnRoles || Object.keys(columnRoles).length === 0) return [];
+    return numericColumns.filter((col) => columnRoles[col] === "outcome");
+  }, [numericColumns, columnRoles]);
 
   useEffect(() => {
-    setXCols([""]);
-    setYCol("");
-  }, [numericColumns]);
+    setXCols((prev) => {
+      const filtered = prev.filter((col) => !col || allowedPredictors.includes(col));
+      return filtered.length ? filtered : [""];
+    });
+    setSelectedGraphs([{ id: 1, type: modelType === "logistic" ? "roc-curve" : "predicted-actual", xCol: "", xCol2: "" }]);
+  }, [numericColumns, allowedPredictors, modelType]);
+
+  useEffect(() => {
+    if (allowedOutcomes.length === 1) {
+      setYCol(allowedOutcomes[0]);
+      return;
+    }
+    if (yCol && columnRoles?.[yCol] === "identifier") {
+      setYCol("");
+    }
+  }, [allowedOutcomes, columnRoles, yCol]);
+
+  useEffect(() => {
+    setSelectedGraphs([{ id: 1, type: modelType === "logistic" ? "roc-curve" : "predicted-actual", xCol: "", xCol2: "" }]);
+  }, [modelType]);
+
+  useEffect(() => {
+    if (!res) return;
+    onReportUpdate?.({
+      res,
+      modelType,
+      selectedGraphs,
+      threshold,
+    });
+  }, [res, modelType, selectedGraphs, threshold, onReportUpdate]);
+
+  const logisticMetrics = useMemo(() => {
+    if (!res || modelType !== "logistic") return null;
+    const probs = res.probabilities || [];
+    const labels = res.y_true || [];
+    if (probs.length === 0 || labels.length === 0) return null;
+
+    let tp = 0;
+    let tn = 0;
+    let fp = 0;
+    let fn = 0;
+    for (let i = 0; i < probs.length; i += 1) {
+      const pred = probs[i] >= threshold ? 1 : 0;
+      const actual = labels[i];
+      if (pred === 1 && actual === 1) tp += 1;
+      if (pred === 0 && actual === 0) tn += 1;
+      if (pred === 1 && actual === 0) fp += 1;
+      if (pred === 0 && actual === 1) fn += 1;
+    }
+
+    const total = tp + tn + fp + fn;
+    const accuracy = total ? (tp + tn) / total : 0;
+    const precision = tp + fp ? tp / (tp + fp) : 0;
+    const recall = tp + fn ? tp / (tp + fn) : 0;
+
+    return { tp, tn, fp, fn, accuracy, precision, recall };
+  }, [res, modelType, threshold]);
+
+  const logisticRocPoint = useMemo(() => {
+    if (!res || modelType !== "logistic") return null;
+    const probs = res.probabilities || [];
+    const labels = res.y_true || [];
+    if (probs.length === 0 || labels.length === 0) return null;
+
+    let tp = 0;
+    let tn = 0;
+    let fp = 0;
+    let fn = 0;
+    for (let i = 0; i < probs.length; i += 1) {
+      const pred = probs[i] >= threshold ? 1 : 0;
+      const actual = labels[i];
+      if (pred === 1 && actual === 1) tp += 1;
+      if (pred === 0 && actual === 0) tn += 1;
+      if (pred === 1 && actual === 0) fp += 1;
+      if (pred === 0 && actual === 1) fn += 1;
+    }
+
+    const tpr = tp + fn ? tp / (tp + fn) : 0;
+    const fpr = fp + tn ? fp / (fp + tn) : 0;
+    return { tpr, fpr, threshold };
+  }, [res, modelType, threshold]);
 
   const selectedX = xCols.filter(Boolean);
 
-  const availableGraphs = [
-    { type: "predicted-actual", label: "Predicted vs Actual" },
-    { type: "residuals-fitted", label: "Residuals vs Fitted" },
-    { type: "qq-plot", label: "Q-Q Plot" },
-    { type: "scale-location", label: "Scale-Location" },
-    { type: "residuals-leverage", label: "Residuals vs Leverage" },
-    { type: "partial-dependence", label: "Partial Dependence" },
-    { type: "coefficients-table", label: "Coefficients Table" },
-  ];
+  const availableGraphs = modelType === "logistic"
+    ? [
+        { type: "roc-curve", label: "ROC Curve" },
+        { type: "confusion-matrix", label: "Confusion Matrix" },
+        { type: "odds-ratios", label: "Odds Ratios" },
+      ]
+    : [
+        { type: "predicted-actual", label: "Predicted vs Actual" },
+        { type: "residuals-fitted", label: "Residuals vs Fitted" },
+        { type: "qq-plot", label: "Q-Q Plot" },
+        { type: "scale-location", label: "Scale-Location" },
+        { type: "residuals-leverage", label: "Residuals vs Leverage" },
+        { type: "partial-dependence", label: "Partial Dependence" },
+        { type: "coefficients-table", label: "Coefficients Table" },
+        { type: "regression-3d", label: "3D Regression" },
+      ];
 
   function addGraph() {
     const newId = Math.max(...selectedGraphs.map((g) => g.id), 0) + 1;
-    setSelectedGraphs([...selectedGraphs, { id: newId, type: "predicted-actual", xCol: "" }]);
+    const defaultType = availableGraphs[0]?.type || "predicted-actual";
+    setSelectedGraphs([...selectedGraphs, { id: newId, type: defaultType, xCol: "", xCol2: "" }]);
   }
 
   function removeGraph(id) {
@@ -43,7 +141,18 @@ export default function RegressionPanel({ numericColumns, file, api }) {
       selectedGraphs.map((g) => {
         if (g.id !== id) return g;
         if (newType === "partial-dependence") {
-          return { ...g, type: newType, xCol: g.xCol || numericColumns[0] || "" };
+          const fallback = selectedX[0] || numericColumns[0] || "";
+          return { ...g, type: newType, xCol: g.xCol || fallback };
+        }
+        if (newType === "regression-3d") {
+          const fallback = selectedX[0] || numericColumns[0] || "";
+          const fallback2 = selectedX[1] || selectedX[0] || numericColumns[1] || numericColumns[0] || "";
+          return {
+            ...g,
+            type: newType,
+            xCol: g.xCol || fallback,
+            xCol2: g.xCol2 || fallback2,
+          };
         }
         return { ...g, type: newType };
       })
@@ -52,6 +161,10 @@ export default function RegressionPanel({ numericColumns, file, api }) {
 
   function updateGraphXCol(id, xCol) {
     setSelectedGraphs(selectedGraphs.map((g) => (g.id === id ? { ...g, xCol } : g)));
+  }
+
+  function updateGraphXCol2(id, xCol2) {
+    setSelectedGraphs(selectedGraphs.map((g) => (g.id === id ? { ...g, xCol2 } : g)));
   }
 
   async function run() {
@@ -69,7 +182,8 @@ export default function RegressionPanel({ numericColumns, file, api }) {
       selectedX.forEach((col) => form.append("x_cols", col));
       form.append("y_col", yCol);
 
-      const r = await fetch(`${api}/regress`, {
+      const endpoint = modelType === "logistic" ? "logistic" : "regress";
+      const r = await fetch(`${api}/${endpoint}`, {
         method: "POST",
         body: form,
       });
@@ -92,6 +206,9 @@ export default function RegressionPanel({ numericColumns, file, api }) {
 
   if (numericColumns.length < 2) {
     return <div style={{ fontSize: 11 }}>Need at least 2 numeric columns.</div>;
+  }
+  if (allowedPredictors.length === 0) {
+    return <div style={{ fontSize: 11 }}>All numeric columns are marked as Identifier or Outcome. Select at least one Predictor.</div>;
   }
 
   return (
@@ -120,11 +237,64 @@ export default function RegressionPanel({ numericColumns, file, api }) {
             MODEL CONFIGURATION
           </div>
           <div style={{ padding: 8 }}>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ display: "block", fontWeight: 700, marginBottom: 4, fontSize: 11 }}>MODEL TYPE</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() => setModelType("linear")}
+                  style={{
+                    ...utilBtn,
+                    fontSize: 9,
+                    padding: "4px 8px",
+                    background: modelType === "linear" ? "var(--accent-strong)" : "var(--panel)",
+                    color: modelType === "linear" ? "var(--panel)" : "var(--text)",
+                    border: "1px solid var(--border-strong)",
+                  }}
+                >
+                  LINEAR
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModelType("logistic")}
+                  style={{
+                    ...utilBtn,
+                    fontSize: 9,
+                    padding: "4px 8px",
+                    background: modelType === "logistic" ? "var(--accent-strong)" : "var(--panel)",
+                    color: modelType === "logistic" ? "var(--panel)" : "var(--text)",
+                    border: "1px solid var(--border-strong)",
+                  }}
+                >
+                  LOGISTIC
+                </button>
+              </div>
+            </div>
+            {modelType === "logistic" && (
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ display: "block", fontWeight: 700, marginBottom: 4, fontSize: 11 }}>THRESHOLD</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <input
+                    type="range"
+                    min="0.1"
+                    max="0.9"
+                    step="0.05"
+                    value={threshold}
+                    onChange={(e) => setThreshold(parseFloat(e.target.value))}
+                    style={{ width: "100%" }}
+                  />
+                  <span style={{ fontSize: 10, width: 36, textAlign: "right" }}>{threshold.toFixed(2)}</span>
+                </div>
+                <div style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 4 }}>
+                  Lower threshold increases recall (catches more positives). Higher threshold increases precision (fewer false alarms).
+                </div>
+              </div>
+            )}
             {/* Y Selection */}
             <div style={{ marginBottom: 10 }}>
               <label style={{ display: "block", fontWeight: 700, marginBottom: 4, fontSize: 11 }}>Y (OUTCOME)</label>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                {numericColumns.map((col) => {
+                {(numericColumns.filter((col) => columnRoles?.[col] !== "identifier") || numericColumns).map((col) => {
                   const locked = selectedX.includes(col) && yCol !== col;
                   return (
                     <button
@@ -159,7 +329,7 @@ export default function RegressionPanel({ numericColumns, file, api }) {
                   <div key={`x-slot-${idx}`} style={{ marginBottom: 8 }}>
                     <div style={{ fontSize: 9, color: "var(--text-muted)", marginBottom: 2 }}>X{idx + 1}</div>
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                      {numericColumns.map((col) => {
+                      {(allowedPredictors.length > 0 ? allowedPredictors : numericColumns).map((col) => {
                         const locked = (col === yCol || takenByOthers.includes(col)) && col !== value;
                         return (
                           <button
@@ -195,7 +365,7 @@ export default function RegressionPanel({ numericColumns, file, api }) {
               <button
                 type="button"
                 onClick={() => setXCols((prev) => [...prev, ""])}
-                disabled={xCols.length >= numericColumns.length - 1}
+                disabled={xCols.length >= (allowedPredictors.length || numericColumns.length) - 1}
                 style={{ ...utilBtn, width: "100%", fontSize: 9, padding: "4px" }}
               >
                 + ADD X
@@ -204,11 +374,11 @@ export default function RegressionPanel({ numericColumns, file, api }) {
 
             {/* Run Button */}
             <button onClick={run} disabled={loading || selectedX.length === 0 || !yCol} style={{ ...utilBtn, width: "100%", marginBottom: 10 }}>
-              {loading ? "RUNNING..." : "RUN REGRESSION"}
+              {loading ? "RUNNING..." : "RUN MODEL"}
             </button>
 
             {/* Summary */}
-            {res && (
+            {res && modelType === "linear" && (
               <div style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 6 }}>SUMMARY</div>
                 <table style={{ width: "100%", fontSize: 10, borderCollapse: "collapse" }}>
@@ -260,7 +430,7 @@ export default function RegressionPanel({ numericColumns, file, api }) {
 
                 <div style={{ fontSize: 11, fontWeight: 700, marginTop: 10, marginBottom: 4 }}>ASSUMPTION TESTS</div>
                 <div style={{ fontSize: 9, color: "var(--text-muted)", marginBottom: 6 }}>
-                  Shapiro‑Wilk runs only for 3–5000 rows. For p‑values, &lt; 0.05 suggests a potential assumption violation.
+                  Shapiro‑Wilk is best for small to medium samples (roughly under 2000 rows). For p‑values, &lt; 0.05 suggests a potential assumption violation.
                 </div>
                 <table style={{ width: "100%", fontSize: 9, borderCollapse: "collapse" }}>
                   <tbody>
@@ -307,6 +477,34 @@ export default function RegressionPanel({ numericColumns, file, api }) {
                 </table>
               </div>
             )}
+            {res && modelType === "logistic" && (
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, marginBottom: 6 }}>CLASSIFICATION SUMMARY</div>
+                <table style={{ width: "100%", fontSize: 10, borderCollapse: "collapse" }}>
+                  <tbody>
+                    <tr style={{ background: "var(--panel-strong)" }}>
+                      <td style={{ padding: "3px 6px", fontWeight: 700 }}>Accuracy</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right" }}>{(logisticMetrics?.accuracy ?? res.accuracy).toFixed(4)}</td>
+                    </tr>
+                    <tr>
+                      <td style={{ padding: "3px 6px", fontWeight: 700 }}>Precision</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right" }}>{(logisticMetrics?.precision ?? res.precision).toFixed(4)}</td>
+                    </tr>
+                    <tr style={{ background: "var(--panel-strong)" }}>
+                      <td style={{ padding: "3px 6px", fontWeight: 700 }}>Recall</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right" }}>{(logisticMetrics?.recall ?? res.recall).toFixed(4)}</td>
+                    </tr>
+                    <tr>
+                      <td style={{ padding: "3px 6px", fontWeight: 700 }}>AUC</td>
+                      <td style={{ padding: "3px 6px", textAlign: "right" }}>{res.roc?.auc.toFixed(4)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div style={{ fontSize: 9, color: "var(--text-muted)", marginTop: 6 }}>
+                  Precision favors fewer false positives. Recall favors catching more true positives.
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -339,15 +537,36 @@ export default function RegressionPanel({ numericColumns, file, api }) {
                           color: "var(--text)",
                         }}
                       >
-                        {availableGraphs.map((g) => (
-                          <option key={g.type} value={g.type}>
-                            {g.label}
+                      {availableGraphs.map((g) => (
+                        <option key={g.type} value={g.type}>
+                          {g.label}
+                        </option>
+                      ))}
+                    </select>
+                    {graph.type === "partial-dependence" && (
+                      <select
+                        value={graph.xCol || selectedX[0] || numericColumns[0] || ""}
+                        onChange={(e) => updateGraphXCol(graph.id, e.target.value)}
+                        style={{
+                          padding: "3px 6px",
+                          fontSize: 10,
+                          fontFamily: "monospace",
+                          border: "1px solid var(--border-strong)",
+                          background: "var(--panel)",
+                          color: "var(--text)",
+                        }}
+                      >
+                        {(selectedX.length > 0 ? selectedX : numericColumns).map((col) => (
+                          <option key={col} value={col}>
+                            {col}
                           </option>
                         ))}
                       </select>
-                      {graph.type === "partial-dependence" && (
+                    )}
+                    {graph.type === "regression-3d" && (
+                      <div style={{ display: "flex", gap: 6 }}>
                         <select
-                          value={graph.xCol || numericColumns[0] || ""}
+                          value={graph.xCol || selectedX[0] || numericColumns[0] || ""}
                           onChange={(e) => updateGraphXCol(graph.id, e.target.value)}
                           style={{
                             padding: "3px 6px",
@@ -358,13 +577,32 @@ export default function RegressionPanel({ numericColumns, file, api }) {
                             color: "var(--text)",
                           }}
                         >
-                          {numericColumns.map((col) => (
+                          {(selectedX.length > 0 ? selectedX : numericColumns).map((col) => (
                             <option key={col} value={col}>
                               {col}
                             </option>
                           ))}
                         </select>
-                      )}
+                        <select
+                          value={graph.xCol2 || selectedX[1] || selectedX[0] || numericColumns[1] || ""}
+                          onChange={(e) => updateGraphXCol2(graph.id, e.target.value)}
+                          style={{
+                            padding: "3px 6px",
+                            fontSize: 10,
+                            fontFamily: "monospace",
+                            border: "1px solid var(--border-strong)",
+                            background: "var(--panel)",
+                            color: "var(--text)",
+                          }}
+                        >
+                          {(selectedX.length > 0 ? selectedX : numericColumns).map((col) => (
+                            <option key={col} value={col}>
+                              {col}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     </div>
                     {selectedGraphs.length > 1 && (
                       <button
@@ -383,7 +621,15 @@ export default function RegressionPanel({ numericColumns, file, api }) {
                     )}
                   </div>
                   <div style={{ padding: 8, background: "var(--panel)" }}>
-                    {renderGraph(graph.type, res, graph.xCol)}
+                    {renderRegressionGraph(
+                      buildRegressionGraph(graph.type, res, {
+                        xCol: graph.xCol,
+                        xCol2: graph.xCol2,
+                        modelType,
+                        logisticMetrics,
+                        logisticRocPoint,
+                      })
+                    )}
                   </div>
                 </div>
               ))}
@@ -408,276 +654,5 @@ export default function RegressionPanel({ numericColumns, file, api }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function renderGraph(type, res, xCol) {
-  const plotConfig = {
-    font: { family: "monospace", size: 10, color: "var(--text)" },
-    margin: { l: 50, r: 20, t: 10, b: 50 },
-    paper_bgcolor: "var(--panel)",
-    plot_bgcolor: "var(--panel)",
-  };
-
-  switch (type) {
-    case "predicted-actual":
-      return (
-        <Plot
-          data={[
-            {
-              x: res.y,
-              y: res.fitted,
-              mode: "markers",
-              marker: { color: "var(--accent)", size: 4 },
-            },
-            {
-              x: [Math.min(...res.y), Math.max(...res.y)],
-              y: [Math.min(...res.y), Math.max(...res.y)],
-              mode: "lines",
-              line: { color: "var(--border-strong)", width: 1, dash: "dash" },
-            },
-          ]}
-          layout={{
-            ...plotConfig,
-            height: 350,
-            xaxis: { title: "Actual " + res.y_col },
-            yaxis: { title: "Predicted " + res.y_col },
-            showlegend: false,
-          }}
-          style={{ width: "100%" }}
-          config={{ displayModeBar: false }}
-        />
-      );
-
-    case "residuals-fitted":
-      return (
-        <Plot
-          data={[
-            {
-              x: res.fitted,
-              y: res.residuals,
-              mode: "markers",
-              marker: { color: "var(--accent)", size: 4 },
-            },
-            {
-              x: [Math.min(...res.fitted), Math.max(...res.fitted)],
-              y: [0, 0],
-              mode: "lines",
-              line: { color: "var(--border-strong)", width: 1, dash: "dash" },
-            },
-          ]}
-          layout={{
-            ...plotConfig,
-            xaxis: { title: "Fitted values" },
-            yaxis: { title: "Residuals" },
-            height: 350,
-            showlegend: false,
-          }}
-          style={{ width: "100%" }}
-          config={{ displayModeBar: false }}
-        />
-      );
-
-    case "qq-plot":
-      return <DiagnosticQQPlot residuals={res.standardized_residuals} />;
-
-    case "scale-location":
-      return (
-        <Plot
-          data={[
-            {
-              x: res.fitted,
-              y: res.standardized_residuals.map((r) => Math.sqrt(Math.abs(r))),
-              mode: "markers",
-              marker: { color: "var(--accent)", size: 4 },
-            },
-          ]}
-          layout={{
-            ...plotConfig,
-            xaxis: { title: "Fitted values" },
-            yaxis: { title: "√|Standardized Residuals|" },
-            height: 350,
-            showlegend: false,
-          }}
-          style={{ width: "100%" }}
-          config={{ displayModeBar: false }}
-        />
-      );
-
-    case "residuals-leverage":
-      return (
-        <Plot
-          data={[
-            {
-              x: res.leverage,
-              y: res.standardized_residuals,
-              mode: "markers",
-              marker: {
-                color: res.cooks_distance,
-                colorscale: [[0, "var(--border)"], [1, "var(--accent-strong)"]],
-                size: 4,
-                colorbar: { title: "Cook's D", titlefont: { size: 9 }, tickfont: { size: 8 } },
-              },
-            },
-          ]}
-          layout={{
-            ...plotConfig,
-            xaxis: { title: "Leverage" },
-            yaxis: { title: "Standardized Residuals" },
-            height: 350,
-          }}
-          style={{ width: "100%" }}
-          config={{ displayModeBar: false }}
-        />
-      );
-
-    case "partial-dependence": {
-      const targetCol = xCol || res.x_cols?.[0];
-      if (!targetCol || !res.x_data?.[targetCol]) {
-        return <div style={{ fontSize: 11 }}>Select a predictor to plot.</div>;
-      }
-      const xVals = res.x_data[targetCol].slice().sort((a, b) => a - b);
-      const uniqueX = Array.from(new Set(xVals));
-      const base = Object.entries(res.coefficients).reduce((acc, [col, coef]) => {
-        if (col === targetCol) return acc;
-        return acc + coef * (res.x_means?.[col] ?? 0);
-      }, res.intercept);
-      const yVals = uniqueX.map((x) => base + res.coefficients[targetCol] * x);
-
-      return (
-        <Plot
-          data={[
-            {
-              x: uniqueX,
-              y: yVals,
-              mode: "lines",
-              line: { color: "var(--accent)", width: 2 },
-            },
-          ]}
-          layout={{
-            ...plotConfig,
-            height: 350,
-            xaxis: { title: targetCol },
-            yaxis: { title: `Partial Dependence (${res.y_col})` },
-            showlegend: false,
-          }}
-          style={{ width: "100%" }}
-          config={{ displayModeBar: false }}
-        />
-      );
-    }
-
-    case "coefficients-table":
-      return (
-        <div style={{ fontSize: 11 }}>
-          <div
-            style={{
-              padding: "6px 8px",
-              background: "var(--panel-alt)",
-              border: "1px solid var(--border)",
-              fontFamily: "monospace",
-              marginBottom: 10,
-              fontSize: 10,
-            }}
-          >
-            {res.y_col} = {res.intercept.toFixed(3)}
-            {Object.entries(res.coefficients).map(([col, coef]) => (
-              <span key={col}>
-                {" "} + {coef.toFixed(3)}*{col}
-              </span>
-            ))}
-          </div>
-
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, border: "1px solid var(--border)" }}>
-            <thead>
-              <tr style={{ background: "var(--panel-strong)" }}>
-                <th style={thUtil}>Variable</th>
-                <th style={thUtil}>Coefficient</th>
-                <th style={thUtil}>p-value</th>
-                <th style={thUtil}>Sig.</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr style={{ background: "var(--panel-alt)" }}>
-                <td style={tdUtil}>Intercept</td>
-                <td style={tdUtil}>{res.intercept.toFixed(4)}</td>
-                <td style={tdUtil}>-</td>
-                <td style={tdUtil}>-</td>
-              </tr>
-              {Object.entries(res.coefficients).map(([col, coef], i) => {
-                const pval = res.p_values[col];
-                let sig = "";
-                if (pval < 0.001) sig = "***";
-                else if (pval < 0.01) sig = "**";
-                else if (pval < 0.05) sig = "*";
-                else sig = "n.s.";
-
-                return (
-                  <tr key={col} style={{ background: i % 2 === 0 ? "var(--panel)" : "var(--panel-alt)" }}>
-                    <td style={tdUtil}>{col}</td>
-                    <td style={tdUtil}>{coef.toFixed(4)}</td>
-                    <td style={tdUtil}>{pval < 0.001 ? "<0.001" : pval.toFixed(4)}</td>
-                    <td style={tdUtil}>{sig}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <p style={{ fontSize: 9, color: "var(--text-muted)", margin: "6px 0 0 0" }}>
-            *** p&lt;0.001 | ** p&lt;0.01 | * p&lt;0.05 | n.s. = not significant
-          </p>
-        </div>
-      );
-
-    default:
-      return <div style={{ fontSize: 11 }}>Unknown graph type</div>;
-  }
-}
-
-function DiagnosticQQPlot({ residuals }) {
-  const sorted = [...residuals].sort((a, b) => a - b);
-  const n = sorted.length;
-
-  function erfInv(x) {
-    const a = 0.147;
-    const ln = Math.log(1 - x * x);
-    const part1 = 2 / (Math.PI * a) + ln / 2;
-    const part2 = ln / a;
-    const sign = x < 0 ? -1 : 1;
-    return sign * Math.sqrt(Math.sqrt(part1 * part1 - part2) - part1);
-  }
-
-  const theoretical = sorted.map((_, i) => {
-    const p = (i + 0.5) / n;
-    return Math.sqrt(2) * erfInv(2 * p - 1);
-  });
-
-  return (
-    <Plot
-      data={[
-        {
-          x: theoretical,
-          y: sorted,
-          mode: "markers",
-          marker: { color: "var(--accent)", size: 4 },
-        },
-        {
-          x: [Math.min(...theoretical), Math.max(...theoretical)],
-          y: [Math.min(...theoretical), Math.max(...theoretical)],
-          mode: "lines",
-          line: { color: "var(--border-strong)", width: 1, dash: "dash" },
-        },
-      ]}
-      layout={{
-        xaxis: { title: "Theoretical Quantiles" },
-        yaxis: { title: "Standardized Residuals" },
-        height: 350,
-        showlegend: false,
-        font: { family: "monospace", size: 10, color: "var(--text)" },
-        margin: { l: 50, r: 20, t: 10, b: 50 },
-      }}
-      style={{ width: "100%" }}
-      config={{ displayModeBar: false }}
-    />
   );
 }
